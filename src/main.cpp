@@ -16,7 +16,10 @@ PubSubClient client(espClient);
 const String deviceId = "24";
 char incomingData[64];
 float tempRange = 0;
+float humiRange = 0;
+float luxRange = 0;
 uint8_t mosfetSpeed = 100;
+bool autoControl = false;
 
 int relayState1 = 0;
 int relayState2 = 0;
@@ -99,10 +102,13 @@ void callback(char *topic, byte *payload, unsigned int length)
   relayState3 = doc["btn3"] ? 1 : 0;
   relayState4 = doc["btn4"] ? 1 : 0;
   tempRange = doc["tempRange"];
+  humiRange = doc["humiRange"];
+  luxRange = doc["luxRange"];
   mosfetSpeed = doc["mosfetSpeed"];
+  autoControl = doc["autoControl"];
 
-  Serial.printf("Received -> Btn1: %d, Btn2: %d, Btn3: %d, Btn4: %d, TempRange: %.2f, MosfetSpeed: %d\n",
-                relayState1, relayState2, relayState3, relayState4, tempRange, mosfetSpeed);
+  // Serial.printf("Received -> Btn1: %d, Btn2: %d, Btn3: %d, Btn4: %d, TempRange: %.2f, MosfetSpeed: %d\n",
+  //               relayState1, relayState2, relayState3, relayState4, tempRange, mosfetSpeed);
 
   sendToArduino();
 }
@@ -121,8 +127,8 @@ void readSerial()
       if (result == 3)
       {
         StaticJsonDocument<128> json;
-        json["temperature"] = temperature;
-        json["humidity"] = humidity;
+        json["temp"] = temperature;
+        json["humi"] = humidity;
         json["lux"] = lux;
         json["id"] = deviceId;
 
@@ -135,7 +141,7 @@ void readSerial()
     {
       int relay1 = 0, relay2 = 0, relay3 = 0, relay4 = 0;
       int result = sscanf(incomingData, "d,%d,%d,%d,%d,%d",
-                          &relay1, &relay2, &relay3, &relay4, &mosfetSpeed);
+                          &relay3, &relay4, &relay1, &relay2, &mosfetSpeed);
 
       if (result == 5)
       {
@@ -162,8 +168,10 @@ void handleRoot()
 
 void sendToArduino()
 {
-  String message = "g," + String(tempRange) + "," + String(mosfetSpeed) + "," +
-                   String(relayState1) + "," + String(relayState2) + "," +
-                   String(relayState3) + "," + String(relayState4);
-  Serial.println(message);
+  String message = "g," + String(tempRange) + "," + String(humiRange) + "," + String(luxRange) + "," +
+                   String(autoControl) + "," + String(mosfetSpeed) + "," +
+                   String(relayState3) + "," + String(relayState4) + "," +
+                   String(relayState1) + "," + String(relayState2);
+
+  Serial.println(message); // Gửi dữ liệu đến Arduino qua Serial
 }
