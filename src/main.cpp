@@ -1,180 +1,169 @@
-#define BLYNK_TEMPLATE_ID "TMPL6kWOWGogq"
-#define BLYNK_TEMPLATE_NAME "bee"
-
 #include <ESP8266WiFi.h>
-#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
-#include <BlynkSimpleEsp8266.h>
-#include <ESP8266WebServer.h> // For Web Server
+#include <WiFiManager.h>
+#include <ESP8266WebServer.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
 
-const char blynkAuth[] = "S_v0DhUiH8tcr6xgBi3o0dFU3nRqW6AX"; // Blynk Auth Token
+// Định nghĩa IP bằng IPAddress
+IPAddress mqttServer(167, 71, 221, 111); // IP: 167.71.221.111
+const int mqttPort = 1883;
 
 WiFiManager wifi_manager;
-ESP8266WebServer server(80); // Web server on port 80
+ESP8266WebServer server(80);
+WiFiClient espClient;
+PubSubClient client(espClient);
 
-String incoming_data = "";
-String serial_log = ""; // To store serial log
-bool debug_server = false;
-bool control_mode = 0;
-char incomingData[64]; // Array to hold incoming data
-float temp_range = 0;
+const String deviceId = "24";
+char incomingData[64];
+float tempRange = 0;
 uint8_t mosfetSpeed = 100;
 
 int relayState1 = 0;
 int relayState2 = 0;
 int relayState3 = 0;
 int relayState4 = 0;
-int relayState5 = 0;
 
 void readSerial();
-void handleRoot(); // Web server root handler
+void handleRoot();
 void sendToArduino();
-byte calculateChecksum(byte *data, size_t length);
+void callback(char *topic, byte *payload, unsigned int length);
+void reconnectMQTT();
 
 void setup()
 {
   Serial.begin(9600);
-  Serial.println("ESP8266 Blynk Connection");
+  Serial.println("ESP8266 MQTT Connection");
 
-  // Set up WiFiManager for automatic connection
-  wifi_manager.autoConnect("ESP8266_Blynk");
+  wifi_manager.autoConnect("ESP8266_MQTT");
   Serial.println("WiFi connected.");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
 
-  // Initialize Blynk
-  Blynk.begin(blynkAuth, WiFi.SSID().c_str(), WiFi.psk().c_str());
+  client.setServer(mqttServer, mqttPort);
+  client.setCallback(callback);
 
-  // Start the Web Server
-  if (debug_server)
-  {
-    server.on("/", handleRoot); // Define root endpoint
-    server.begin();
-  }
+  server.on("/", handleRoot);
+  server.begin();
   Serial.println("Web server started.");
 }
 
 void loop()
 {
-  Blynk.run();           // Keep Blynk active
-  server.handleClient(); // Handle web server requests
+  server.handleClient();
   readSerial();
+  if (!client.connected())
+  {
+    reconnectMQTT();
+  }
+  client.loop();
+}
+
+void reconnectMQTT()
+{
+  while (!client.connected())
+  {
+    Serial.print("...");
+    if (client.connect(deviceId.c_str()))
+    {
+      Serial.println("connected");
+      const String topic = "device/" + deviceId;
+      const bool status = client.subscribe(topic.c_str());
+      Serial.print("Subscribing to: ");
+      Serial.print(topic);
+      Serial.print(" -> ");
+      Serial.println(status ? "Success" : "Failed");
+    }
+    else
+    {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      delay(5000);
+    }
+  }
+}
+
+void callback(char *topic, byte *payload, unsigned int length)
+{
+  StaticJsonDocument<256> doc;
+  DeserializationError error = deserializeJson(doc, payload, length);
+  if (error)
+  {
+    Serial.print("deserializeJson() failed: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  relayState1 = doc["btn1"] ? 1 : 0;
+  relayState2 = doc["btn2"] ? 1 : 0;
+  relayState3 = doc["btn3"] ? 1 : 0;
+  relayState4 = doc["btn4"] ? 1 : 0;
+  tempRange = doc["tempRange"];
+  mosfetSpeed = doc["mosfetSpeed"];
+
+  Serial.printf("Received -> Btn1: %d, Btn2: %d, Btn3: %d, Btn4: %d, TempRange: %.2f, MosfetSpeed: %d\n",
+                relayState1, relayState2, relayState3, relayState4, tempRange, mosfetSpeed);
+
+  sendToArduino();
 }
 
 void readSerial()
 {
   if (Serial.available() > 0)
   {
-    int len = Serial.readBytesUntil('\n', incomingData, sizeof(incomingData));
-    incomingData[len] = '\0'; // Null terminate the string
+    int len = Serial.readBytesUntil('\n', incomingData, sizeof(incomingData) - 1);
+    incomingData[len] = '\0';
 
-    // Check if the incoming data starts with "s,"
-    if (strstr(incomingData, "s,") != NULL)
+    if (strstr(incomingData, "s,") == incomingData)
     {
-      float temperature = 0;
-      float humidity = 0;
-      float lux = 0;
-
-      // Parse the string data: "s,25.5,60.2,123.4,relay1State,relay2State,...,mosfetSpeed"
-      int result = sscanf(incomingData, "s,%f,%f,%f",
-                          &temperature, &humidity, &lux);
-      Serial.println(result);
+      float temperature = 0, humidity = 0, lux = 0;
+      int result = sscanf(incomingData, "s,%f,%f,%f", &temperature, &humidity, &lux);
       if (result == 3)
-      { // Successfully parsed all expected values
-        // Output received values
+      {
+        StaticJsonDocument<128> json;
+        json["temperature"] = temperature;
+        json["humidity"] = humidity;
+        json["lux"] = lux;
+        json["id"] = deviceId;
 
-        // Send the data to Blynk (Virtual Pins)
-        Blynk.virtualWrite(V0, temperature); // Send temperature to V0
-        Blynk.virtualWrite(V1, humidity);    // Send humidity to V1
-        Blynk.virtualWrite(V2, lux);         // Send lux value to V2
+        char buffer[128];
+        size_t len = serializeJson(json, buffer);
+        client.publish("device/update", buffer, len);
       }
     }
-    else if (strstr(incomingData, "d,") != NULL)
+    else if (strstr(incomingData, "d,") == incomingData)
     {
       int relay1 = 0, relay2 = 0, relay3 = 0, relay4 = 0;
-
-      // Parse the string data: "s,25.5,60.2,123.4,relay1State,relay2State,...,mosfetSpeed"
       int result = sscanf(incomingData, "d,%d,%d,%d,%d,%d",
                           &relay1, &relay2, &relay3, &relay4, &mosfetSpeed);
 
       if (result == 5)
-      { // Successfully parsed all expected values
-        // Output received values
+      {
+        StaticJsonDocument<128> json;
+        json["id"] = deviceId;
+        json["btn1"] = relay1;
+        json["btn2"] = relay2;
+        json["btn3"] = relay3;
+        json["btn4"] = relay4;
 
-        Blynk.virtualWrite(V6, relay1);      // Send Relay 1 state to V6
-        Blynk.virtualWrite(V7, relay2);      // Send Relay 2 state to V7
-        Blynk.virtualWrite(V8, relay3);      // Send Relay 3 state to V8
-        Blynk.virtualWrite(V9, relay4);      // Send Relay 4 state to V9
-        Blynk.virtualWrite(V5, mosfetSpeed); // Send Mosfet speed to V5
+        char buffer[128];
+        size_t len = serializeJson(json, buffer);
+        client.publish("device/update", buffer, len);
       }
     }
   }
 }
-byte calculateChecksum(byte *data, size_t length)
-{
-  byte checksum = 0;
-  for (size_t i = 0; i < length; i++)
-  {
-    checksum ^= data[i];
-  }
-  return checksum;
-}
 
-// Web server root handler
 void handleRoot()
 {
-  String html = "<html><head><title>ESP8266 Serial Log</title></head><body>";
-  html += "<h1>ESP8266 Serial Log</h1>";
-  html += "<div style='white-space: pre-wrap; font-family: monospace;'>" + serial_log + "</div>";
-  html += "</body></html>";
-  serial_log = "";
+  String html = "<html><body><h1>ESP8266 Serial Log</h1></body></html>";
   server.send(200, "text/html", html);
 }
 
 void sendToArduino()
 {
-  String message = "g," + String(temp_range) + "," + String(control_mode) + "," + String(mosfetSpeed);
-      // Add relay states to the message
-      message += "," + String(relayState1) + "," + String(relayState2) + "," + String(relayState3) + "," + String(relayState4);
-
-  Serial.println(message); // Send the formatted message to Arduino over serial
-}
-
-BLYNK_WRITE(V5)
-{                              // Virtual Pin V5 is assigned to input number widget
-  mosfetSpeed = param.asInt(); // Set the temperature range from the app
-  sendToArduino();
-}
-
-BLYNK_WRITE(V4)
-{                                 // Virtual Pin V4 is assigned to button widget
-  control_mode = !!param.asInt(); // 0 = Off, 1 = On
-  sendToArduino();
-}
-
-BLYNK_WRITE(V3)
-{                               // Virtual Pin V3 is assigned to input number widget
-  temp_range = param.asFloat(); // Set the temperature range from the app
-  sendToArduino();
-}
-
-BLYNK_WRITE(V6)
-{                              // Virtual Pin V6 controls Relay 1
-  relayState1 = param.asInt(); // Update the state of relay 1
-  sendToArduino();
-}
-
-BLYNK_WRITE(V7)
-{                              // Virtual Pin V7 controls Relay 2
-  relayState2 = param.asInt(); // Update the state of relay 2
-  sendToArduino();
-}
-
-BLYNK_WRITE(V8)
-{                              // Virtual Pin V8 controls Relay 3
-  relayState3 = param.asInt(); // Update the state of relay 3
-  sendToArduino();
-}
-
-BLYNK_WRITE(V9)
-{                              // Virtual Pin V9 controls Relay 4
-  relayState4 = param.asInt(); // Update the state of relay 4
-  sendToArduino();
+  String message = "g," + String(tempRange) + "," + String(mosfetSpeed) + "," +
+                   String(relayState1) + "," + String(relayState2) + "," +
+                   String(relayState3) + "," + String(relayState4);
+  Serial.println(message);
 }
