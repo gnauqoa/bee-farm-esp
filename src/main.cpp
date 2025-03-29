@@ -4,7 +4,6 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 
-// Định nghĩa IP bằng IPAddress
 IPAddress mqttServer(167, 71, 221, 111); // IP: 167.71.221.111
 const int mqttPort = 1883;
 
@@ -13,7 +12,10 @@ ESP8266WebServer server(80);
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-const String deviceId = "24";
+const String deviceId = "2";
+const String chanelUpdate = "device/" + deviceId + "/update";
+const String username = "dev_" + deviceId;
+const String token = "0a4f3ba26abed956822feb8dc9e61e59";
 char incomingData[64];
 float tempRange = 0;
 float humiRange = 0;
@@ -66,7 +68,7 @@ void reconnectMQTT()
   while (!client.connected())
   {
     Serial.print("...");
-    if (client.connect(deviceId.c_str()))
+    if (client.connect(deviceId.c_str(), username.c_str(), token.c_str()))
     {
       Serial.println("connected");
       const String topic = "device/" + deviceId;
@@ -134,7 +136,7 @@ void readSerial()
 
         char buffer[128];
         size_t len = serializeJson(json, buffer);
-        client.publish("device/update", buffer, len);
+        client.publish(chanelUpdate.c_str(), buffer, len);
       }
     }
     else if (strstr(incomingData, "d,") == incomingData)
@@ -151,10 +153,11 @@ void readSerial()
         json["btn2"] = relay2;
         json["btn3"] = relay3;
         json["btn4"] = relay4;
+        json["mosfetSpeed"] = mosfetSpeed;
 
         char buffer[128];
         size_t len = serializeJson(json, buffer);
-        client.publish("device/update", buffer, len);
+        client.publish(chanelUpdate.c_str(), buffer, len);
       }
     }
   }
