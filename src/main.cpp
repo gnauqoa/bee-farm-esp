@@ -133,6 +133,7 @@ void readSerial()
         json["humi"] = humidity;
         json["lux"] = lux;
         json["id"] = deviceId;
+        json["status"] = "online";
 
         char buffer[128];
         size_t len = serializeJson(json, buffer);
@@ -154,6 +155,7 @@ void readSerial()
         json["btn3"] = relay3;
         json["btn4"] = relay4;
         json["mosfetSpeed"] = mosfetSpeed;
+        json["status"] = "online";
 
         char buffer[128];
         size_t len = serializeJson(json, buffer);
